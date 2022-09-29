@@ -90,7 +90,7 @@ def authorized():
         result = _build_msal_app(cache=cache).acquire_token_by_authorization_code(
             code=request.args['code'],
             scopes=Config.SCOPE,
-            redirect_url=url_for('authorized', _external=True)
+            redirect_url=url_for('authorized', _external=True, _scheme='https')
         )
         if "error" in result:
             return render_template("auth_error.html", result=result)
@@ -99,7 +99,13 @@ def authorized():
         # Here, we'll use the admin username for anyone who is authenticated by MS
         username = session['user'].get('preffered_username').split('@')[0]
         user = User.query.filter_by(username=username).first()
+        if not user:
+            new_user = User(username=username,password_hash='-')
+            db.session.add(new_user)
+            db.session.commit()
+            user = User.query.filter_by(username=username).first()
         login_user(user)
+        flash(f'Welcome {user.username} !')
         _save_cache(cache)
     return redirect(url_for('home'))
 
