@@ -98,7 +98,7 @@ def authorized():
         # Note: In a real app, we'd use the 'name' property from session["user"] below
         # Here, we'll use the admin username for anyone who is authenticated by MS
         username = session['user'].get('preffered_username').split('@')[0]
-        user = User.query.filter_by(username="username").first()
+        user = User.query.filter_by(username=username).first()
         login_user(user)
         _save_cache(cache)
     return redirect(url_for('home'))
