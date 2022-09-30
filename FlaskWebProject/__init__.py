@@ -10,9 +10,9 @@ from flask_session import Session
 
 app = Flask(__name__)
 app.config.from_object(Config)
-app.logger.setLevel(logging.WARNING)
+app.logger.setLevel(logging.INFO)
 handler = logging.StreamHandler()
-handler.setLevel(logging.WARNING)
+handler.setLevel(logging.INFO)
 app.logger.addHandler(handler)
 
 

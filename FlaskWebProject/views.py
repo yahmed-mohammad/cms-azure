@@ -12,6 +12,7 @@ from flask_login import current_user, login_user, logout_user, login_required
 from FlaskWebProject.models import User, Post
 import msal
 import uuid
+import logging
 
 imageSourceUrl = 'https://'+ app.config['BLOB_ACCOUNT']  + '.blob.core.windows.net/' + app.config['BLOB_CONTAINER']  + '/'
 
@@ -21,6 +22,7 @@ imageSourceUrl = 'https://'+ app.config['BLOB_ACCOUNT']  + '.blob.core.windows.n
 def home():
     user = User.query.filter_by(username=current_user.username).first_or_404()
     posts = Post.query.all()
+
     return render_template(
         'index.html',
         title='Home Page',
@@ -47,14 +49,6 @@ def new_post():
 @login_required
 def post(id):
     post = Post.query.get(int(id))
-    if request.args.get('action')=='delete':
-        # if the post has image also, delete it
-        if post.image_path != None:
-            post.delete_image()
-        db.session.delete(post)
-        db.session.commit()
-        flash(f'post "{post.title}" deleted successfully')
-        return redirect(url_for('home'))
     form = PostForm(formdata=request.form, obj=post)
     if form.validate_on_submit():
         post.save_changes(form, request.files['image_path'], current_user.id)
@@ -73,20 +67,12 @@ def login():
     form = LoginForm()
     if form.validate_on_submit():
         user = User.query.filter_by(username=form.username.data).first()
-        if user and user.password_hash == '-': 
-            # OAuth2 users are not allowed to use password
-            flash('Not Allowed! Sign in with your Microsoft Account')
-            return redirect(url_for('login'))
-        elif user is None or not user.check_password(form.password.data):
+        if user is None or not user.check_password(form.password.data):
+            app.logger.warning('Invalid username or password')
             flash('Invalid username or password')
-            # Log for unsuccessful login attempt:
-            app.logger.warning("Invalid login attempt!")
             return redirect(url_for('login'))
-
         login_user(user, remember=form.remember_me.data)
-        # Log for successful login:
-        app.logger.warning(f"{user.username} logged in successfully")
-        flash(f'Welcome {user.username} !')
+        app.logger.warning('Successful User Login')
         next_page = request.args.get('next')
         if not next_page or url_parse(next_page).netloc != '':
             next_page = url_for('home')
@@ -103,58 +89,57 @@ def authorized():
         return render_template("auth_error.html", result=request.args)
     if request.args.get('code'):
         cache = _load_cache()
+        # TODO: Acquire a token from a built msal app, along with the appropriate redirect URI
         result = _build_msal_app(cache=cache).acquire_token_by_authorization_code(
-            code=request.args['code'],
+            request.args['code'],
             scopes=Config.SCOPE,
-            redirect_uri=url_for('authorized', _external=True, _scheme="https"))
+            redirect_uri=url_for('authorized', _external=True, _scheme='https'))
+        if "error" in result:
+            return render_template("auth_error.html", result=result)
         session["user"] = result.get("id_token_claims")
-        # Get user name from result, preferred_username is email
-        username = session["user"].get('preferred_username').split('@')[0] # Preprocess the email and use it for username
-        user = User.query.filter_by(username=username).first()
-        if not user:
-            new_user = User(username=username,password_hash='-')
-            db.session.add(new_user)
-            db.session.commit()
-            user = User.query.filter_by(username=username).first()
+        # Note: In a real app, we'd use the 'name' property from session["user"] below
+        # Here, we'll use the admin username for anyone who is authenticated by MS
+        user = User.query.filter_by(username="admin").first()
         login_user(user)
-        flash(f'Welcome {user.username} !')
         _save_cache(cache)
     return redirect(url_for('home'))
 
 @app.route('/logout')
 def logout():
     logout_user()
+    app.logger.warning('Successful User logout!')
     if session.get("user"): # Used MS Login
         # Wipe out user and its token cache from session
         session.clear()
         # Also logout from your tenant's web session
         return redirect(
             Config.AUTHORITY + "/oauth2/v2.0/logout" +
-            "?post_logout_redirect_uri=" + url_for("login", _external=True, _scheme="https"))
+            "?post_logout_redirect_uri=" + url_for("login", _external=True))
 
     return redirect(url_for('login'))
 
+#Sources for below: Examples from the Udacity module on Security and Monitoring Basics
 def _load_cache():
+    # TODO: Load the cache from `msal`, if it exists
     cache = msal.SerializableTokenCache()
-    token_cache = session.get('token_cache')
-    if token_cache:
-        cache.deserialize(token_cache)
+    if session.get('token_cache'):
+        cache.deserialize(session['token_cache'])
     return cache
 
 def _save_cache(cache):
+    # TODO: Save the cache, if it has changed
     if cache.has_state_changed:
         session['token_cache'] = cache.serialize()
 
 def _build_msal_app(cache=None, authority=None):
+    # TODO: Return a ConfidentialClientApplication
     return msal.ConfidentialClientApplication(
-        authority=authority or Config.AUTHORITY,
-        client_id=Config.CLIENT_ID,
-        client_credential=Config.CLIENT_SECRET,
-        token_cache=cache)
+        Config.CLIENT_ID, authority=authority or Config.AUTHORITY,
+        client_credential=Config.CLIENT_SECRET, token_cache=cache)
 
 def _build_auth_url(authority=None, scopes=None, state=None):
+    # TODO: Return the full Auth Request URL with appropriate Redirect URI
     return _build_msal_app(authority=authority).get_authorization_request_url(
-        scopes=scopes or [],
+        scopes or [],
         state=state or str(uuid.uuid4()),
-        redirect_uri=url_for('authorized', _external=True, _scheme='https')
-        )
+        redirect_uri=url_for('authorized', _external=True, _scheme='https'))
