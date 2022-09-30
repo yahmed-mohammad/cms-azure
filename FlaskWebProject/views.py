@@ -137,11 +137,6 @@ def logout():
 
 def _load_cache():
     # TODO: Load the cache from `msal`, if it exists
-    cache = None
-    return cache
-
-def _load_cache():
-    # TODO: Load the cache from `msal`, if it exists
     cache = msal.SerializableTokenCache()
     token_cache = session.get('token_cache')
     if token_cache:
