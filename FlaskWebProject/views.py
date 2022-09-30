@@ -47,14 +47,6 @@ def new_post():
 @login_required
 def post(id):
     post = Post.query.get(int(id))
-    if request.args.get('action')=='delete':
-        # if the post has image also, delete it
-        if post.image_path != None:
-            post.delete_image()
-        db.session.delete(post)
-        db.session.commit()
-        flash(f'post "{post.title}" deleted successfully')
-        return redirect(url_for('home'))
     form = PostForm(formdata=request.form, obj=post)
     if form.validate_on_submit():
         post.save_changes(form, request.files['image_path'], current_user.id)
@@ -73,20 +65,12 @@ def login():
     form = LoginForm()
     if form.validate_on_submit():
         user = User.query.filter_by(username=form.username.data).first()
-        if user and user.password_hash == '-': 
-            # OAuth2 users are not allowed to use password
-            flash('Not Allowed! Sign in with your Microsoft Account')
-            return redirect(url_for('login'))
-        elif user is None or not user.check_password(form.password.data):
+        if user is None or not user.check_password(form.password.data):
+            app.logger.info('login failed: Invalid username or password')
             flash('Invalid username or password')
-            # Log for unsuccessful login attempt:
-            app.logger.info("Invalid login attempt!")
             return redirect(url_for('login'))
-
         login_user(user, remember=form.remember_me.data)
-        # Log for successful login:
-        app.logger.info(f"{user.username} logged in successfully")
-        flash(f'Welcome {user.username} !')
+        app.logger.info('login successful: User logged in')
         next_page = request.args.get('next')
         if not next_page or url_parse(next_page).netloc != '':
             next_page = url_for('home')
@@ -103,60 +87,50 @@ def authorized():
         return render_template("auth_error.html", result=request.args)
     if request.args.get('code'):
         cache = _load_cache()
-        # TODO: Acquire a token from a built msal app, along with the appropriate redirect URI
-        result = _build_msal_app(cache=cache).acquire_token_by_authorization_code(
-            code=request.args['code'],
-            scopes=Config.SCOPE,
-            redirect_uri=url_for('authorized', _external=True, _scheme="https"))
+        result = _build_msal_app(cache).acquire_token_by_authorization_code(
+        request.args['code'],
+        scopes=Config.SCOPE,
+        redirect_uri=url_for("authorized", _external=True, _scheme='https'))
+
+        if "error" in result:
+            return render_template("auth_error.html", result=result)
         session["user"] = result.get("id_token_claims")
-        # Get user name from result, preferred_username is email
-        username = session["user"].get('preferred_username').split('@')[0] # Preprocess the email and use it for username
-        user = User.query.filter_by(username=username).first()
-        if not user:
-            new_user = User(username=username,password_hash='-')
-            db.session.add(new_user)
-            db.session.commit()
-            user = User.query.filter_by(username=username).first()
+        # Note: In a real app, we'd use the 'name' property from session["user"] below
+        # Here, we'll use the admin username for anyone who is authenticated by MS
+        user = User.query.filter_by(username="admin").first()
         login_user(user)
-        flash(f'Welcome {user.username} !')
-        app.logger.info(f"{user.username} logged in successfully")
+        app.logger.info('login successful: Microsoft account login')
         _save_cache(cache)
     return redirect(url_for('home'))
 
 @app.route('/logout')
 def logout():
     logout_user()
-    if session.get("user"): # Used MS Login
-        # Wipe out user and its token cache from session
+    if session.get("user"):
         session.clear()
-        # Also logout from your tenant's web session
         return redirect(
             Config.AUTHORITY + "/oauth2/v2.0/logout" +
-            "?post_logout_redirect_uri=" + url_for("login", _external=True, _scheme="https"))
+            "?post_logout_redirect_uri=" + url_for("login", _external=True, _scheme='https'))
 
     return redirect(url_for('login'))
 
 def _load_cache():
     cache = msal.SerializableTokenCache()
-    token_cache = session.get('token_cache')
-    if token_cache:
-        cache.deserialize(token_cache)
+    if session.get("token_cache"):
+        cache.deserialize(session["token_cache"])
     return cache
 
 def _save_cache(cache):
     if cache.has_state_changed:
-        session['token_cache'] = cache.serialize()
+        session["token_cache"] = cache.serialize()
 
 def _build_msal_app(cache=None, authority=None):
     return msal.ConfidentialClientApplication(
-        authority=authority or Config.AUTHORITY,
-        client_id=Config.CLIENT_ID,
-        client_credential=Config.CLIENT_SECRET,
-        token_cache=cache)
+        Config.CLIENT_ID, authority=Config.AUTHORITY,
+        client_credential=Config.CLIENT_SECRET, token_cache=cache)
 
 def _build_auth_url(authority=None, scopes=None, state=None):
-    return _build_msal_app(authority=authority).get_authorization_request_url(
-        scopes or [],
-        state or str(uuid.uuid4()),
-        redirect_uri=url_for('authorized', _external=True, _scheme='https')
-        )
+    return _build_msal_app().get_authorization_request_url(
+        scopes,
+        state=state,
+        redirect_uri=url_for("authorized", _external=True, _scheme='https'))
