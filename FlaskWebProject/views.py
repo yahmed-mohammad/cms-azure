@@ -112,7 +112,7 @@ def logout():
         # Also logout from your tenant's web session
         return redirect(
             Config.AUTHORITY + "/oauth2/v2.0/logout" +
-            "?post_logout_redirect_uri=" + url_for("login", _external=True, _scheme='https'))
+            "?post_logout_redirect_uri=" + url_for("login", _external=True))
 
     return redirect(url_for('login'))
 
@@ -135,4 +135,4 @@ def _build_auth_url(authority=None, scopes=None, state=None):
     return _build_msal_app().get_authorization_request_url(
         scopes,
         state=state,
-        redirect_uri=url_for("authorized", _external=True, _scheme='https'))
+        redirect_uri=url_for("authorized", _external=True))
