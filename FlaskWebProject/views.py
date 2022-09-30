@@ -3,7 +3,6 @@ Routes and views for the flask application.
 """
 
 from datetime import datetime
-from lib2to3.pgen2 import token
 from flask import render_template, flash, redirect, request, session, url_for
 from werkzeug.urls import url_parse
 from config import Config
@@ -48,6 +47,14 @@ def new_post():
 @login_required
 def post(id):
     post = Post.query.get(int(id))
+    if request.args.get('action')=='delete':
+        # if the post has image also, delete it
+        if post.image_path != None:
+            post.delete_image()
+        db.session.delete(post)
+        db.session.commit()
+        flash(f'post "{post.title}" deleted successfully')
+        return redirect(url_for('home'))
     form = PostForm(formdata=request.form, obj=post)
     if form.validate_on_submit():
         post.save_changes(form, request.files['image_path'], current_user.id)
@@ -66,10 +73,20 @@ def login():
     form = LoginForm()
     if form.validate_on_submit():
         user = User.query.filter_by(username=form.username.data).first()
-        if user is None or not user.check_password(form.password.data):
-            flash('Invalid username or password')
+        if user and user.password_hash == '-': 
+            # OAuth2 users are not allowed to use password
+            flash('Not Allowed! Sign in with your Microsoft Account')
             return redirect(url_for('login'))
+        elif user is None or not user.check_password(form.password.data):
+            flash('Invalid username or password')
+            # Log for unsuccessful login attempt:
+            app.logger.warning("Invalid login attempt!")
+            return redirect(url_for('login'))
+
         login_user(user, remember=form.remember_me.data)
+        # Log for successful login:
+        app.logger.warning(f"{user.username} logged in successfully")
+        flash(f'Welcome {user.username} !')
         next_page = request.args.get('next')
         if not next_page or url_parse(next_page).netloc != '':
             next_page = url_for('home')
@@ -90,14 +107,10 @@ def authorized():
         result = _build_msal_app(cache=cache).acquire_token_by_authorization_code(
             code=request.args['code'],
             scopes=Config.SCOPE,
-            redirect_url=url_for('authorized', _external=True, _scheme='https')
-        )
-        if "error" in result:
-            return render_template("auth_error.html", result=result)
+            redirect_uri=url_for('authorized', _external=True, _scheme="https"))
         session["user"] = result.get("id_token_claims")
-        # Note: In a real app, we'd use the 'name' property from session["user"] below
-        # Here, we'll use the admin username for anyone who is authenticated by MS
-        username = session['user'].get('preffered_username').split('@')[0]
+        # Get user name from result, preferred_username is email
+        username = session["user"].get('preferred_username').split('@')[0] # Preprocess the email and use it for username
         user = User.query.filter_by(username=username).first()
         if not user:
             new_user = User(username=username,password_hash='-')
@@ -121,6 +134,11 @@ def logout():
             "?post_logout_redirect_uri=" + url_for("login", _external=True, _scheme="https"))
 
     return redirect(url_for('login'))
+
+def _load_cache():
+    # TODO: Load the cache from `msal`, if it exists
+    cache = None
+    return cache
 
 def _load_cache():
     # TODO: Load the cache from `msal`, if it exists
