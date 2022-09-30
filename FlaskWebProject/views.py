@@ -89,7 +89,7 @@ def authorized():
         cache = _load_cache()
         result = _build_msal_app(cache).acquire_token_by_authorization_code(
         request.args['code'],
-        scopes=Config.SCOPE,  # Misspelled scope would cause an HTTP 400 error here
+        scopes=Config.SCOPE,
         redirect_uri=url_for("authorized", _external=True, _scheme='https'))
 
         if "error" in result:
@@ -106,10 +106,8 @@ def authorized():
 @app.route('/logout')
 def logout():
     logout_user()
-    if session.get("user"): # Used MS Login
-        # Wipe out user and its token cache from session
+    if session.get("user"):
         session.clear()
-        # Also logout from your tenant's web session
         return redirect(
             Config.AUTHORITY + "/oauth2/v2.0/logout" +
             "?post_logout_redirect_uri=" + url_for("login", _external=True, _scheme='https'))
